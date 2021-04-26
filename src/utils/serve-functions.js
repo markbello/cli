@@ -96,22 +96,18 @@ const DEFAULT_LAMBDA_OPTIONS = {
   verboseLevel: 3,
 }
 
-// 10 seconds for synchronous functions
-const SYNCHRONOUS_FUNCTION_TIMEOUT = 1e4
-const executeSynchronousFunction = ({ event, lambdaPath, clientContext, response }) =>
+const executeSynchronousFunction = ({ event, lambdaPath, timeout, clientContext, response }) =>
   lambdaLocal.execute({
     ...DEFAULT_LAMBDA_OPTIONS,
     event,
     lambdaPath,
     clientContext,
     callback: createSynchronousFunctionCallback(response),
-    timeoutMs: SYNCHRONOUS_FUNCTION_TIMEOUT,
+    timeoutMs: timeout,
   })
 
-// 15 minuets for background functions
-const BACKGROUND_FUNCTION_TIMEOUT = 9e5
 const BACKGROUND_FUNCTION_STATUS_CODE = 202
-const executeBackgroundFunction = ({ event, lambdaPath, clientContext, response, functionName }) => {
+const executeBackgroundFunction = ({ event, lambdaPath, timeout, clientContext, response, functionName }) => {
   console.log(`${NETLIFYDEVLOG} Queueing background function ${styleFunctionName(functionName)} for execution`)
   response.status(BACKGROUND_FUNCTION_STATUS_CODE)
   response.end()
@@ -122,7 +118,7 @@ const executeBackgroundFunction = ({ event, lambdaPath, clientContext, response,
     lambdaPath,
     clientContext,
     callback: createBackgroundFunctionCallback(functionName),
-    timeoutMs: BACKGROUND_FUNCTION_TIMEOUT,
+    timeoutMs: timeout,
   })
 }
 
@@ -191,7 +187,7 @@ const validateFunctions = function ({ functions, capabilities, warn }) {
 
 const DEBOUNCE_WAIT = 300
 
-const createHandler = async function ({ dir, capabilities, omitFileChangesLog, warn }) {
+const createHandler = async function ({ dir, capabilities, timeouts, omitFileChangesLog, warn }) {
   let { functions, watchDirs } = await getFunctionsAndWatchDirs(dir)
   validateFunctions({ functions, capabilities, warn })
   const watcher = chokidar.watch(watchDirs, { ignored: /node_modules/, ignoreInitial: true })
@@ -279,12 +275,19 @@ const createHandler = async function ({ dir, capabilities, omitFileChangesLog, w
       return executeBackgroundFunction({
         event,
         lambdaPath,
+        timeout: timeouts.backgroundFunctions,
         clientContext,
         response,
         functionName,
       })
     }
-    return executeSynchronousFunction({ event, lambdaPath, clientContext, response })
+    return executeSynchronousFunction({
+      event,
+      lambdaPath,
+      timeout: timeouts.syncFunctions,
+      clientContext,
+      response,
+    })
   }
 }
 
@@ -400,7 +403,7 @@ const createFormSubmissionHandler = function ({ siteUrl, warn }) {
   }
 }
 
-const getFunctionsServer = async function ({ dir, omitFileChangesLog, siteUrl, capabilities, warn }) {
+const getFunctionsServer = async function ({ dir, omitFileChangesLog, siteUrl, capabilities, timeouts, warn }) {
   const app = express()
   app.set('query parser', 'simple')
 
@@ -422,7 +425,7 @@ const getFunctionsServer = async function ({ dir, omitFileChangesLog, siteUrl, c
     res.status(204).end()
   })
 
-  app.all('*', await createHandler({ dir, capabilities, omitFileChangesLog, warn }))
+  app.all('*', await createHandler({ dir, capabilities, timeouts, omitFileChangesLog, warn }))
 
   return app
 }
@@ -503,7 +506,17 @@ const startServer = async ({ server, settings, log, errorExit }) => {
   })
 }
 
-const startFunctionsServer = async ({ config, settings, site, log, warn, errorExit, siteUrl, capabilities }) => {
+const startFunctionsServer = async ({
+  config,
+  settings,
+  site,
+  log,
+  warn,
+  errorExit,
+  siteUrl,
+  capabilities,
+  timeouts,
+}) => {
   // serve functions from zip-it-and-ship-it
   // env variables relies on `url`, careful moving this code
   if (settings.functions) {
@@ -519,6 +532,7 @@ const startFunctionsServer = async ({ config, settings, site, log, warn, errorEx
       omitFileChangesLog,
       siteUrl,
       capabilities,
+      timeouts,
       warn,
     })
 
